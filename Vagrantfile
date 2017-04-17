@@ -5,7 +5,8 @@ require 'fileutils'
 
 Vagrant.require_version ">= 1.6.0"
 
-CLOUD_CONFIG_PATH = File.join(File.dirname(__FILE__), "user-data")
+CLOUD_CONFIG_MASTER_PATH = File.join(File.dirname(__FILE__), "user-data-master")
+CLOUD_CONFIG_WORKER_PATH = File.join(File.dirname(__FILE__), "user-data-worker")
 CONFIG = File.join(File.dirname(__FILE__), "config.rb")
 
 # Defaults for config options defined in CONFIG
@@ -21,6 +22,17 @@ $vm_cpus = 1
 $vb_cpuexecutioncap = 100
 $shared_folders = {}
 $forwarded_ports = {}
+$insert_vagrant_insecure_key = false
+$private_vm_network_prefix = "172.17.8"
+
+# Defaults for SSL
+$ca_key = "ca-key.pem"
+$ca_cert = "ca.pem"
+$apiserver_key = "apiserver-key.pem"
+$apiserver_cert = "apiserver.pem"
+
+# Miscellaneous
+$basic_auth = "basic-auth.csv"
 
 # Attempt to apply the deprecated environment variable NUM_INSTANCES to
 # $num_instances while allowing config.rb to override it
@@ -47,7 +59,7 @@ end
 
 Vagrant.configure("2") do |config|
   # always use Vagrants insecure key
-  config.ssh.insert_key = false
+  config.ssh.insert_key = $insert_vagrant_insecure_key
   # forward ssh agent to easily ssh into the different machines
   config.ssh.forward_agent = true
 
@@ -124,7 +136,7 @@ Vagrant.configure("2") do |config|
         vb.customize ["modifyvm", :id, "--cpuexecutioncap", "#{$vb_cpuexecutioncap}"]
       end
 
-      ip = "172.17.8.#{i+100}"
+      ip = $private_vm_network_prefix + ".#{i+100}"
       config.vm.network :private_network, ip: ip
 
       # Uncomment below to enable NFS for sharing the host machine into the coreos-vagrant VM.
@@ -137,11 +149,40 @@ Vagrant.configure("2") do |config|
         config.vm.synced_folder ENV['HOME'], ENV['HOME'], id: "home", :nfs => true, :mount_options => ['nolock,vers=3,udp']
       end
 
-      if File.exist?(CLOUD_CONFIG_PATH)
-        config.vm.provision :file, :source => "#{CLOUD_CONFIG_PATH}", :destination => "/tmp/vagrantfile-user-data"
+      $cloud_config_path = CLOUD_CONFIG_WORKER_PATH
+      if i == 1
+        $cloud_config_path = CLOUD_CONFIG_MASTER_PATH
+      end
+
+      if File.exist?($cloud_config_path)
+        config.vm.provision :file, :source => "#{$cloud_config_path}", :destination => "/tmp/vagrantfile-user-data"
         config.vm.provision :shell, :inline => "mv /tmp/vagrantfile-user-data /var/lib/coreos-vagrant/", :privileged => true
       end
 
+      # Copy basic authentication details for default users
+      config.vm.provision :file, :source => "#{$basic_auth}", :destination => "/tmp/#{$basic_auth}"
+      config.vm.provision :shell, :inline => "mkdir -p /etc/kubernetes/", :privileged => true
+      config.vm.provision :shell, :inline => "mv /tmp/#{$basic_auth} /etc/kubernetes/", :privileged => true
+
+      # Copy SSL collateral
+      config.vm.provision :file, :source => "ssl-certs/#{$ca_key}", :destination => "/tmp/#{$ca_key}"
+      config.vm.provision :file, :source => "ssl-certs/#{$ca_cert}", :destination => "/tmp/#{$ca_cert}"
+      config.vm.provision :file, :source => "ssl-certs/#{$apiserver_key}", :destination => "/tmp/#{$apiserver_key}"
+      config.vm.provision :file, :source => "ssl-certs/#{$apiserver_cert}", :destination => "/tmp/#{$apiserver_cert}"
+      config.vm.provision :file, :source => "ssl-certs/#{config.vm.hostname}-key.pem", :destination => "/tmp/#{config.vm.hostname}-key.pem"
+      config.vm.provision :file, :source => "ssl-certs/#{config.vm.hostname}.pem", :destination => "/tmp/#{config.vm.hostname}.pem"
+
+      config.vm.provision :shell, :inline => "mv /tmp/#{$ca_key} /etc/ssl/certs/", :privileged => true
+      config.vm.provision :shell, :inline => "mv /tmp/#{$ca_cert} /etc/ssl/certs/", :privileged => true
+      config.vm.provision :shell, :inline => "mv /tmp/#{$apiserver_key} /etc/ssl/certs/", :privileged => true
+      config.vm.provision :shell, :inline => "mv /tmp/#{$apiserver_cert} /etc/ssl/certs/", :privileged => true
+      config.vm.provision :shell, :inline => "mv /tmp/#{config.vm.hostname}-key.pem /etc/ssl/certs/", :privileged => true
+      config.vm.provision :shell, :inline => "mv /tmp/#{config.vm.hostname}.pem /etc/ssl/certs/", :privileged => true
+
+      # Install kubectl in /opt/bin
+      config.vm.provision :shell, :inline => "mkdir -p /opt/bin", :privileged => true
+      config.vm.provision :shell, :inline => "curl -s -o /opt/bin/kubectl -L https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl", :privileged => true
+      config.vm.provision :shell, :inline => "chmod a+x /opt/bin/kubectl", :privileged => true
     end
   end
 end
