@@ -136,7 +136,7 @@ Vagrant.configure("2") do |config|
         vb.customize ["modifyvm", :id, "--cpuexecutioncap", "#{$vb_cpuexecutioncap}"]
       end
 
-      ip = $private_vm_network_prefix + ".#{i+100}"
+      ip = $private_vm_network_prefix + ".#{i+$starting_ip_address}"
       config.vm.network :private_network, ip: ip
 
       # Uncomment below to enable NFS for sharing the host machine into the coreos-vagrant VM.
